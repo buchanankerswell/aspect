@@ -1205,17 +1205,19 @@ namespace aspect
     {
       public:
         AdditionalMaterialOutputsStokesRHS(const unsigned int n_points)
-          : rhs_u(n_points), rhs_p(n_points), rhs_melt_pc(n_points)
+          : rhs_u(n_points), rhs_div_u(n_points, 0.0), rhs_p(n_points), rhs_melt_pc(n_points)
         {}
 
         ~AdditionalMaterialOutputsStokesRHS() override
           = default;
 
-        void average (const MaterialAveraging::AveragingOperation /*operation*/,
-                      const FullMatrix<double>  &/*projection_matrix*/,
-                      const FullMatrix<double>  &/*expansion_matrix*/) override
+        void average (const MaterialAveraging::AveragingOperation operation,
+                      const FullMatrix<double>  &projection_matrix,
+                      const FullMatrix<double>  &expansion_matrix) override
         {
-          // TODO: not implemented
+          MaterialAveraging::average_property (operation, projection_matrix, expansion_matrix, rhs_div_u);
+          MaterialAveraging::average_property (operation, projection_matrix, expansion_matrix, rhs_p);
+          MaterialAveraging::average_property (operation, projection_matrix, expansion_matrix, rhs_melt_pc);
         }
 
         /**
@@ -1224,6 +1226,13 @@ namespace aspect
          * quadrature point.
          */
         std::vector<Tensor<1,dim>> rhs_u;
+
+        /**
+         * Isotropic stress (volumetric/bulk-viscosity force) on the right-hand
+         * side for the conservation of momentum equation, tested against
+         * $\nabla \cdot \mathbf{v}$ in each quadrature point.
+         */
+        std::vector<double> rhs_div_u;
 
         /**
          * Force value for the conservation of mass equation (second Stokes
@@ -1255,11 +1264,11 @@ namespace aspect
         ~BulkViscosityOutputs() override
           = default;
 
-        void average (const MaterialAveraging::AveragingOperation /*operation*/,
-                      const FullMatrix<double>  &/*projection_matrix*/,
-                      const FullMatrix<double>  &/*expansion_matrix*/) override
+        void average (const MaterialAveraging::AveragingOperation operation,
+                      const FullMatrix<double>  &projection_matrix,
+                      const FullMatrix<double>  &expansion_matrix) override
         {
-          // TODO: not implemented
+          MaterialAveraging::average_property (operation, projection_matrix, expansion_matrix, bulk_viscosities);
         }
 
         /**

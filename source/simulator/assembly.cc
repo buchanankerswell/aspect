@@ -67,13 +67,21 @@ namespace aspect
     assemblers->stokes_preconditioner.push_back(std::make_unique<aspect::Assemblers::StokesPreconditioner<dim>>());
     assemblers->stokes_system.push_back(std::make_unique<aspect::Assemblers::StokesIncompressibleTerms<dim>>());
 
-    if (material_model->is_compressible() || parameters.enable_prescribed_dilation || prescribed_dilation_manager.get_active_plugin_names().size() > 0)
-      {
-        // The compressible part of the preconditioner is only necessary if we use the simplified A block
-        if (parameters.use_full_A_block_preconditioner == false)
-          assemblers->stokes_preconditioner.push_back(
-            std::make_unique<aspect::Assemblers::StokesCompressiblePreconditioner<dim>>());
+    const bool has_compressible_strain_rate =
+      material_model->is_compressible()
+      || parameters.enable_prescribed_dilation
+      || prescribed_dilation_manager.get_active_plugin_names().size() > 0;
 
+    if ((has_compressible_strain_rate || parameters.enable_bulk_viscosity)
+        && parameters.use_full_A_block_preconditioner == false)
+      {
+        // The compressible and bulk-viscosity parts of the preconditioner are only necessary if we use the simplified A block
+        assemblers->stokes_preconditioner.push_back(
+          std::make_unique<aspect::Assemblers::StokesCompressiblePreconditioner<dim>>());
+      }
+
+    if (has_compressible_strain_rate)
+      {
         assemblers->stokes_system.push_back(
           std::make_unique<aspect::Assemblers::StokesCompressibleStrainRateViscosityTerm<dim>>());
       }

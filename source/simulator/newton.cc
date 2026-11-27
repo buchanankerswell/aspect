@@ -46,9 +46,12 @@ namespace aspect
     assemblers.stokes_preconditioner.push_back(std::make_unique<aspect::Assemblers::NewtonStokesPreconditioner<dim>>());
     assemblers.stokes_system.push_back(std::make_unique<aspect::Assemblers::NewtonStokesIncompressibleTerms<dim>>());
 
-    if (this->get_material_model().is_compressible() ||
-        this->get_parameters().enable_prescribed_dilation ||
-        this->get_prescribed_dilation_manager().get_active_plugin_names().size() > 0)
+    const bool has_compressible_strain_rate =
+      this->get_material_model().is_compressible() ||
+      this->get_parameters().enable_prescribed_dilation ||
+      this->get_prescribed_dilation_manager().get_active_plugin_names().size() > 0;
+
+    if (has_compressible_strain_rate || this->get_parameters().enable_bulk_viscosity)
       {
         // The compressible part of the preconditioner is only necessary if we use the simplified A block
         if (this->get_parameters().use_full_A_block_preconditioner == false)

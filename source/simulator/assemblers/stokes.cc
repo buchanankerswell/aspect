@@ -46,6 +46,12 @@ namespace aspect
         ? scratch.material_model_outputs.template get_additional_output_object<MaterialModel::PrescribedPlasticDilation<dim>>()
         : nullptr;
 
+      const std::shared_ptr<const MaterialModel::BulkViscosityOutputs<dim>>
+      bulk_viscosity_outputs =
+        this->get_parameters().enable_bulk_viscosity
+        ? scratch.material_model_outputs.template get_additional_output_object<MaterialModel::BulkViscosityOutputs<dim>>()
+        : nullptr;
+
       // When using the Q1-Q1 equal order element, we need to compute the
       // projection of the Q1 pressure shape functions onto the constants
       // and use this projection in the computation of matrix terms.
@@ -110,7 +116,12 @@ namespace aspect
             }
 
           const double eta = scratch.material_model_outputs.viscosities[q];
-          const double one_over_eta = 1. / eta;
+          const double xi = (this->get_parameters().enable_bulk_viscosity)
+                            ? ((bulk_viscosity_outputs != nullptr)
+                               ? bulk_viscosity_outputs->bulk_viscosities[q]
+                               : this->get_parameters().constant_bulk_viscosity)
+                            : 0.0;
+          const double one_over_eta = 1. / (eta + xi);
 
           const double JxW = scratch.finite_element_values.JxW(q);
 
@@ -229,6 +240,21 @@ namespace aspect
              outputs.template get_additional_output_object<MaterialModel::PrescribedPlasticDilation<dim>>()->dilation_lhs_term.size()
              == n_points, ExcInternalError());
 
+      if (this->get_parameters().enable_bulk_viscosity
+          && outputs.template has_additional_output_object<MaterialModel::BulkViscosityOutputs<dim>>() == false)
+        {
+          auto bulk_viscosity_outputs =
+            std::make_unique<MaterialModel::BulkViscosityOutputs<dim>> (n_points);
+          bulk_viscosity_outputs->bulk_viscosities.assign(
+            n_points, this->get_parameters().constant_bulk_viscosity);
+          outputs.additional_outputs.push_back(std::move(bulk_viscosity_outputs));
+        }
+
+      Assert(!this->get_parameters().enable_bulk_viscosity
+             ||
+             outputs.template get_additional_output_object<MaterialModel::BulkViscosityOutputs<dim>>()->bulk_viscosities.size()
+             == n_points, ExcInternalError());
+
     }
 
 
@@ -253,6 +279,17 @@ namespace aspect
       const unsigned int stokes_dofs_per_cell = data.local_dof_indices.size();
       const unsigned int n_q_points           = scratch.finite_element_values.n_quadrature_points;
 
+      const bool has_compressible_strain_rate =
+        this->get_material_model().is_compressible()
+        || this->get_parameters().enable_prescribed_dilation
+        || this->get_prescribed_dilation_manager().get_active_plugin_names().size() > 0;
+
+      const std::shared_ptr<const MaterialModel::BulkViscosityOutputs<dim>>
+      bulk_viscosity_outputs =
+        this->get_parameters().enable_bulk_viscosity
+        ? scratch.material_model_outputs.template get_additional_output_object<MaterialModel::BulkViscosityOutputs<dim>>()
+        : nullptr;
+
       // Loop over all quadrature points and assemble their contributions to
       // the preconditioner matrix
       for (unsigned int q = 0; q < n_q_points; ++q)
@@ -264,7 +301,14 @@ namespace aspect
               scratch.div_phi_u[i_stokes]   = scratch.finite_element_values[introspection.extractors.velocities].divergence (i, q);
             }
 
-          const double eta_two_thirds = scratch.material_model_outputs.viscosities[q] * 2.0 / 3.0;
+          const double eta_two_thirds = has_compressible_strain_rate
+                                        ? scratch.material_model_outputs.viscosities[q] * 2.0 / 3.0
+                                        : 0.0;
+          const double xi = (this->get_parameters().enable_bulk_viscosity)
+                            ? ((bulk_viscosity_outputs != nullptr)
+                               ? bulk_viscosity_outputs->bulk_viscosities[q]
+                               : this->get_parameters().constant_bulk_viscosity)
+                            : 0.0;
 
           const double JxW = scratch.finite_element_values.JxW(q);
 
@@ -272,10 +316,35 @@ namespace aspect
             for (unsigned int j = 0; j < stokes_dofs_per_cell; ++j)
               if (introspection.stokes_dof_info[i].component_index ==
                   introspection.stokes_dof_info[j].component_index)
-                data.local_matrix(i, j) += (- eta_two_thirds * (scratch.div_phi_u[i] * scratch.div_phi_u[j])
+                data.local_matrix(i, j) += ((xi - eta_two_thirds) * (scratch.div_phi_u[i] * scratch.div_phi_u[j])
                                            )
                                            * JxW;
         }
+    }
+
+
+
+    template <int dim>
+    void
+    StokesCompressiblePreconditioner<dim>::
+    create_additional_material_model_outputs(MaterialModel::MaterialModelOutputs<dim> &outputs) const
+    {
+      const unsigned int n_points = outputs.n_evaluation_points();
+
+      if (this->get_parameters().enable_bulk_viscosity
+          && outputs.template has_additional_output_object<MaterialModel::BulkViscosityOutputs<dim>>() == false)
+        {
+          auto bulk_viscosity_outputs =
+            std::make_unique<MaterialModel::BulkViscosityOutputs<dim>> (n_points);
+          bulk_viscosity_outputs->bulk_viscosities.assign(
+            n_points, this->get_parameters().constant_bulk_viscosity);
+          outputs.additional_outputs.push_back(std::move(bulk_viscosity_outputs));
+        }
+
+      Assert(!this->get_parameters().enable_bulk_viscosity
+             ||
+             outputs.template get_additional_output_object<MaterialModel::BulkViscosityOutputs<dim>>()->bulk_viscosities.size()
+             == n_points, ExcInternalError());
     }
 
 
@@ -361,9 +430,12 @@ namespace aspect
                   scratch.grads_phi_u[i_stokes] = scratch.finite_element_values[introspection.extractors.velocities].symmetric_gradient(i,q);
                   scratch.div_phi_u[i_stokes]   = scratch.finite_element_values[introspection.extractors.velocities].divergence (i, q);
                 }
-              else if (this->get_parameters().enable_elasticity)
+              else
                 {
-                  scratch.grads_phi_u[i_stokes] = scratch.finite_element_values[introspection.extractors.velocities].symmetric_gradient(i,q);
+                  if (this->get_parameters().enable_elasticity)
+                    scratch.grads_phi_u[i_stokes] = scratch.finite_element_values[introspection.extractors.velocities].symmetric_gradient(i,q);
+                  if (force != nullptr && this->get_parameters().enable_additional_stokes_rhs)
+                    scratch.div_phi_u[i_stokes]   = scratch.finite_element_values[introspection.extractors.velocities].divergence (i, q);
                 }
             }
 
@@ -395,6 +467,7 @@ namespace aspect
 
               if (force != nullptr && this->get_parameters().enable_additional_stokes_rhs)
                 data.local_rhs(i) += (force->rhs_u[q] * scratch.phi_u[i]
+                                      + force->rhs_div_u[q] * scratch.div_phi_u[i]
                                       + pressure_scaling * force->rhs_p[q] * scratch.phi_p[i])
                                      * JxW;
 
